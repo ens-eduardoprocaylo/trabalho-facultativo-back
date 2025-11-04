@@ -1,73 +1,88 @@
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const Usuario = require('../models/Usuario');
+const nodemailer = require('nodemailer');  // Para enviar o e-mail
+const bcrypt = require('bcryptjs');  // Para criptografar a senha
+const jwt = require('jsonwebtoken');  // Para criar tokens JWT
+const Usuario = require('../models/Usuario');  // Seu modelo de usuário
 
-// Função para registrar um novo usuário
-const registrar = async (req, res) => {
-  const { nome, email, senha } = req.body;
+// Função para enviar o link de recuperação de senha
+const enviarRecuperacaoSenha = async (req, res) => {
+  const { email } = req.body;
 
-  // Validação de dados de entrada
-  if (!nome || !email || !senha) {
-    return res.status(400).json({ mensagem: 'Preencha todos os campos' });
+  if (!email) {
+    return res.status(400).json({ mensagem: 'Email é obrigatório' });
   }
 
   try {
-    // Verifica se o e-mail já está em uso
-    const usuarioExiste = await Usuario.findOne({ email });
-    if (usuarioExiste) {
-      return res.status(400).json({ mensagem: 'O e-mail já está em uso' });
-    }
+    const usuario = await Usuario.findOne({ where: { email } });
 
-    // Criptografa a senha antes de salvar
-    const salt = await bcrypt.genSalt(10);
-    const senhaCriptografada = await bcrypt.hash(senha, salt);
-
-    // Cria o novo usuário no banco de dados
-    const novoUsuario = await Usuario.create({
-      nome,
-      email,
-      senha: senhaCriptografada,
-    });
-
-    res.status(201).json({ mensagem: 'Usuário registrado com sucesso' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ mensagem: 'Erro ao registrar o usuário' });
-  }
-};
-
-// Função para login de usuário
-const login = async (req, res) => {
-  const { email, senha } = req.body;
-
-  // Verificação básica dos campos
-  if (!email || !senha) {
-    return res.status(400).json({ mensagem: 'Preencha todos os campos' });
-  }
-
-  try {
-    // Verifica se o usuário existe no banco de dados
-    const usuario = await Usuario.findOne({ email });
     if (!usuario) {
-      return res.status(400).json({ mensagem: 'Usuário não encontrado' });
+      return res.status(404).json({ mensagem: 'Usuário não encontrado' });
     }
 
-    // Verifica se a senha fornecida corresponde à senha criptografada no banco
-    const senhaValida = await bcrypt.compare(senha, usuario.senha);
-    if (!senhaValida) {
-      return res.status(400).json({ mensagem: 'Senha incorreta' });
-    }
+    // Criar o token de recuperação (1 hora de validade)
+    const token = jwt.sign({ usuarioId: usuario.id }, process.env.JWT_SECRET, { expiresIn: '1h' });
 
-    // Gera um token JWT após a autenticação bem-sucedida
-    const token = jwt.sign({ id: usuario._id }, process.env.JWT_SECRET, {
-      expiresIn: '1h', // O token expira em 1 hora
+    // Aqui, vamos configurar o link para ser dinâmico e pegar a URL correta do frontend
+    const urlFrontend = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const linkRecuperacao = `${urlFrontend}/recuperar-senha/${token}`;
+
+    // Configuração do Nodemailer para enviar o e-mail
+    const transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.EMAIL_USER,  // E-mail de envio
+        pass: process.env.EMAIL_PASS,  // Senha ou senha de aplicativo
+      },
     });
 
-    res.status(200).json({ mensagem: 'Login bem-sucedido', token });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ mensagem: 'Erro ao fazer login' });
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: usuario.email,
+      subject: 'Recuperação de Senha',
+      text: `Clique no link abaixo para redefinir sua senha:\n\n${linkRecuperacao}`,
+    };
+
+    // Enviar o e-mail
+    await transporter.sendMail(mailOptions);
+
+    res.status(200).json({ mensagem: 'E-mail de recuperação enviado com sucesso' });
+  } catch (error) {
+    console.error('[RECUPERAR-SENHA][ERRO]:', error);
+    res.status(500).json({ mensagem: 'Erro ao enviar o e-mail de recuperação' });
   }
 };
 
-module.exports = { registrar, login };
+// Função para redefinir a senha
+const redefinirSenha = async (req, res) => {
+  const { token, novaSenha } = req.body;
+
+  if (!novaSenha) {
+    return res.status(400).json({ mensagem: 'Nova senha é obrigatória' });
+  }
+
+  try {
+    // Validar o token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const usuario = await Usuario.findOne({ where: { id: decoded.usuarioId } });
+
+    if (!usuario) {
+      return res.status(404).json({ mensagem: 'Usuário não encontrado' });
+    }
+
+    // Verificar se a nova senha é válida (por exemplo, comprimento mínimo)
+    if (novaSenha.length < 6) {
+      return res.status(400).json({ mensagem: 'A nova senha deve ter no mínimo 6 caracteres' });
+    }
+
+    // Criptografar a nova senha e salvar no banco
+    const senhaCriptografada = await bcrypt.hash(novaSenha, 10);
+    usuario.senha = senhaCriptografada;
+    await usuario.save();
+
+    res.status(200).json({ mensagem: 'Senha redefinida com sucesso' });
+  } catch (error) {
+    console.error('[REDEFINIR-SENHA][ERRO]:', error);
+    res.status(500).json({ mensagem: 'Erro ao redefinir a senha' });
+  }
+};
+
+module.exports = { enviarRecuperacaoSenha, redefinirSenha };
