@@ -21,6 +21,7 @@ app.use(express.json());
 
 // Rotas da API
 app.use('/api/usuarios', usuarioRoutes);  // As rotas de usuário devem começar com '/api/usuarios'
+app.use('/api/corridas', corridaRoutes);
 
 // Rota para a raiz ("/")
 app.get('/', (req, res) => {
